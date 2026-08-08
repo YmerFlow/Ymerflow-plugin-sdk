@@ -130,33 +130,6 @@ registerHook('app_providers', () => [
 ])
 ```
 
-### `auth_login`
-
-Fire-and-forget notification that the user **just authenticated** via the sign-in form — either a
-fresh login or a new signup. Unlike the contribution hooks above, this is an **event hook**:
-callbacks run for their side effects and their return values are discarded, so a listener should
-return `[]` (or nothing).
-
-This is the only signal that distinguishes "the user just authenticated in this tab" from "the app
-booted with an existing token in `localStorage`" — a plain page refresh restores the session
-without firing this hook. Use it for one-time post-authentication actions (onboarding nudges,
-analytics, first-run setup) that must **not** repeat on every reload.
-
-- **Runner:** `run`
-- **Fired by:** `LandingPage.jsx` — immediately after `AuthContext.login(...)` in both the
-  sign-in and sign-up handlers
-- **Callback receives:** `({ isSignup: boolean })`
-  - `isSignup` — `true` when the event came from the sign-up form, `false` for sign-in. The
-    payload carries this from the start even though a given listener may ignore it.
-- **Callback returns:** `[]` (return value ignored)
-
-```js
-registerHook('auth_login', ({ isSignup }) => {
-  sessionStorage.setItem('just_authenticated', '1')
-  return []
-})
-```
-
 ### `account_tabs`
 
 Add extra tabs to the Account page. Both `account_tabs` and `admin_tabs` (below) are consumed by
