@@ -18,16 +18,16 @@ content-addressed frontend artifact served from `/plugin-assets/{content_hash}/â
      ```
    In `auto` mode a local file overrides the registry for that exact `name@version`.
 
-2. A user starts a build and registers it:
-   ```
-   POST /plugins/build  { project_id, environment_id, npm_name, npm_version }
-   # poll the returned process until done, then:
-   POST /plugins        { process_id, process_version, scope: "user" }
-   ```
-   `POST /plugins/build` runs a `build_frontend_plugin` Process; its output dataset (the built
-   `dist/`) lands in the project bucket. `POST /plugins` reads the built `package.json` for
-   `nagelfluh.remoteName` + `built_against`, computes a `content_hash`, and creates the
-   `Plugin` + `PluginVersion` rows.
+2. A user starts a build by creating a `build_frontend_plugin` process via the generic
+   `POST /projects/{project_id}/process` endpoint (the same mechanism used to create any other
+   process, e.g. `create_environment`), specifying `npm_name`/`npm_version` as its parameters.
+   There are no separate "build plugin" or "register plugin" endpoints. When the process
+   completes, its output dataset (the built `dist/`) lands in the project bucket, and
+   `ProcessVersion._create_outputs` looks for a `plugin.json` the build wrote there; if found, it
+   calls `backend/services/plugin_registration.py`, which reads `plugin.json` for the remote name,
+   npm name/version, and `built_against`, computes a `content_hash` from the output dataset, and
+   creates the `Plugin` + `PluginVersion` rows â€” all as a side effect of the build completing,
+   with no separate registration call.
 
 3. A user enables it: `POST /plugins/{id}/enable` pins them to the current latest version. From then
    on `GET /plugins/me` lists it with `source: "remote"` and a `base_url` of

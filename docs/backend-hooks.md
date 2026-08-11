@@ -26,13 +26,15 @@ runner flavours:
 - **`hooks.run_first.*`** — calls `hooks.run_first.<name>(default, *args, **kwargs)`. Calls each
   hook in turn and returns the first **non-`None`** result; if none answer, returns `default`.
   Unlike `run`/`run_async`, disagreement between plugins is *not* an error — first-registered
-  (by dist-name sort order) silently wins. Only used where exactly one answer is needed (e.g.
-  picking a single storage backend for a new project).
+  (by dist-name sort order) silently wins. Intended for cases where exactly one answer is needed
+  (as opposed to `select_clusters`/`select_storage_backends`'s "union of allowed ids" shape). As
+  of this writing, no hook in the host application actually uses this runner — there is currently
+  no live example to point to.
 
 There's also `hooks.any_registered(name)`, a plain function (not a namespace) that returns whether
 *any* plugin registers a given hook name at all — used to distinguish "no plugins registered" from
 "plugins registered but all returned nothing" for callers that only want a fallback in the former
-case (e.g. `select_clusters`, below).
+case (e.g. `select_clusters`/`select_storage_backends`, below).
 
 > Source-path references below point at the **host application** repository (see the
 > [overview](README.md) for context).
@@ -202,7 +204,7 @@ async def job_pre_run(db, user, process, process_version):
 Called after a job finishes (whether it succeeded or failed), while the database transaction is
 still open. Intended for billing, usage tracking, or notification side effects.
 
-- **Caller:** `backend/models/process.py` `ProcessVersion.handle_job_completion()` — `await hooks.run_async.job_completed(db, process, process_version, runtime_seconds, status)`
+- **Caller:** `backend/models/process.py` `ProcessVersion._handle_job_completion()` (a `@staticmethod`) — `await hooks.run_async.job_completed(db, process, process_version, runtime_seconds, status)`
 - **Runner:** `run_async` (coroutines are awaited)
 - **Parameters:**
   - `db` (`sqlalchemy.ext.asyncio.AsyncSession`) — active database session (transaction not yet committed)
@@ -230,8 +232,9 @@ every active cluster is allowed (checked via `hooks.any_registered`, not by an e
 registered hook that legitimately returns an empty set means "no clusters allowed", not "fall back
 to all").
 
-- **Caller:** `backend/models/cluster.py` `get_allowed_clusters()` — `hooks.run.select_clusters(db, user, project_id, resource_requests)`
-- **Runner:** `run` (synchronous)
+- **Caller:** `backend/models/cluster.py` `get_allowed_clusters()` — `await hooks.run_async.select_clusters(db, user, project_id, resource_requests)`
+- **Runner:** `run_async` (coroutines are awaited) — plugin implementations must define this hook
+  as `async def`
 - **Parameters:**
   - `db` (`sqlalchemy.ext.asyncio.AsyncSession`) — active database session
   - `user` (`backend.models.User`) — the requesting user
@@ -240,7 +243,7 @@ to all").
 - **Returns:** `list[str]` — cluster ids this plugin allows; the union across all registered plugins is the final allowed set
 
 ```python
-def select_clusters(db, user, project_id, resource_requests):
+async def select_clusters(db, user, project_id, resource_requests):
     if user.billing_account and user.billing_account.plan == "premium":
         return ["gpu-cluster-1", "gpu-cluster-2"]
     return ["shared-cluster"]
@@ -248,10 +251,13 @@ def select_clusters(db, user, project_id, resource_requests):
 
 ### `cluster_provider_handlers`
 
-Registers `ClusterProvider` implementations for `Cluster.cluster_type` values (e.g.
-`same-as-backend`, `kubeconfig`, `minikube`). Core registers its own built-in providers through
-this exact same hook (see the host's root `setup.py`) — a plugin adding a new cluster type (e.g.
-GKE) uses the identical channel core does, with no "core is special" path.
+Registers `ClusterProvider` implementations for `Cluster.cluster_type` values. Core registers only
+its two built-in providers, `same-as-backend` and `kubeconfig`, through this exact same hook (see
+the host's root `setup.py`) — a plugin adding a new cluster type (e.g. GKE, or `minikube`, which
+now ships from `plugins/ymerflow-minikube` rather than core — see
+`docs/plans/minikube-provisioning-plugin.md`) uses the identical channel core does, with no "core
+is special" path. A stock install without the minikube plugin has no self-hosted cluster option
+left, only `same-as-backend`/`kubeconfig`.
 
 - **Caller:** `backend/services/cluster_providers/__init__.py` `get_cluster_provider()` — `hooks.run.cluster_provider_handlers()`
 - **Runner:** `run` (synchronous)
@@ -275,18 +281,41 @@ class via `cluster_provider_handlers`.
   can't complete registration synchronously in the admin "Add Cluster" dialog (the config is
   filled in later by something running on the target host, e.g. a setup script the admin
   copy-pastes). See `docs/plans/minikube-cluster-registration-ux.md` in the host repo for the
-  out-of-band registration flow this enables (`minikube` is the only built-in provider that sets
-  this).
+  out-of-band registration flow this enables (`minikube`, the cluster type shipped by
+  `plugins/ymerflow-minikube`, is the only provider that sets this).
 - `connect(provider_config: dict, namespace: str) -> K8sClient` — **required**, no default.
   Synchronous — just constructs and returns a `K8sClient`, it does not itself open a connection
   (`K8sClient` lazily initializes on first API call). This is the one method every provider must
   implement; everything else is generic dispatch built on top of the client it returns.
+- `materialize_kubeconfig(provider_config: dict) -> dict` — no default implementation. Returns a
+  kubeconfig-shaped dict — the exact shape `connect()`'s own `kubeconfig` argument already accepts
+  (`K8sClient` loads it via `config.load_kube_config_from_dict`) — for use by kubectl-based scripts
+  (`prod/runall-production.sh`, `docker/build.sh`, `backup.sh`, `restore.sh`,
+  `debug-harness/run_debug.sh`). Must not shell out to a vendor CLI (`gcloud`, `minikube`) to build
+  this — construct the credential directly via the provider's own Python SDK/HTTP calls. A provider
+  that doesn't implement it (raises `NotImplementedError`) just means those kubectl-based scripts
+  can't target that cluster type yet — a loud, correct failure rather than a silent wrong-cluster
+  one.
 - `test_connection(provider_config: dict) -> None` (async) — optional; default implementation
   calls `connect()` then does a timeout-bounded `list_namespace` call to verify reachability. Raise
   a clear exception on failure. Override when a cheaper or more specific check makes sense (e.g.
   validating a token before even attempting a network call).
 - `bootstrap(provider_config: dict) -> dict` (sync) — **required**, no default. See [The
   `bootstrap()` provisioning flow](#the-bootstrap-provisioning-flow) below.
+- `teardown(provider_config: dict) -> None` (sync) — the mirror of `bootstrap()`: removes the
+  k8s-level resources `bootstrap()` created (the jobs namespace, Kueue config, etc.). Default is a
+  no-op passthrough, exactly like `bootstrap()`'s default for core-provided providers. A provider
+  that manages a local VM (e.g. minikube) must **not** stop/delete the VM itself here — only the
+  k8s-level resources it applied — leaving VM destruction a manual, explicit operation. Must be
+  idempotent (safe to call when nothing is provisioned).
+- `resolve_app_hostname(provider_config: dict, app_config: dict) -> str | None` (async) — optional,
+  cheap, idempotent. Called *before* the app's Secret is built, so its result can be baked into
+  `app_config["SERVER_URL"]` first. Needed for a provider (e.g. GKE) whose externally-reachable
+  hostname isn't known until a resource (a static IP) is reserved — that reservation normally only
+  happens inside `expose_app()`, which runs after the Secret containing `BACKEND_BASE_URL` was
+  already built and applied. Default: returns `app_config.get("SERVER_URL")` unchanged — every
+  provider whose hostname doesn't need a reservation step (`same-as-backend`/`minikube`) never
+  needs to override this.
 - `supports_app_deployment` (class attribute, default `False`), `deploy_app(...)` /
   `expose_app(...)` (async, optional) — the hook for a provider that can also **host the Nagelfluh
   application itself** (backend + frontend pods, their config/secrets, their exposure) on its
@@ -335,18 +364,19 @@ It lazily initializes (`_ensure_initialized()`) on first API call, exposing `cor
 orchestrator: `create_job`, `create_secret`, `delete_job`, `get_job_status`, `get_pod_for_job`,
 `stream_pod_logs`/`get_pod_logs`, `get_pod_events`/`get_job_events`, `get_job_error_status`/
 `get_pod_error_status`, `get_cluster_queue_limits` (reads a Kueue `ClusterQueue`'s CPU/memory
-quota), and `watch_job` (an async generator yielding job status updates until a terminal state).
-A plugin's `ClusterProvider` never needs to call these itself — it only needs to construct and
-return the client; the host calls these methods on it.
+quota), `is_pod_container_running(pod_name)`, and `watch_job` (an async generator yielding job
+status updates until a terminal state). A plugin's `ClusterProvider` never needs to call these
+itself — it only needs to construct and return the client; the host calls these methods on it.
 
 #### Job-readiness provisioning is automatic
 
 Once a `Cluster` becomes active (self-service registration callback, direct admin creation, or a
 config.env-driven `bootstrap()`-seeded default cluster), the host calls
-`backend.services.cluster_job_provisioning.ensure_cluster_job_ready(k8s_client, namespace)` against
-it — installing Kueue (if not already present), sizing and applying a `ResourceFlavor`/
-`ClusterQueue`/`LocalQueue` from the cluster's real node capacity, and applying the backend's
-job-running RBAC. This is generic, pure-`kubernetes_asyncio` logic that works against **any**
+`backend.services.cluster_job_provisioning.ensure_cluster_job_ready(k8s_client, namespace,
+quota_config=None)` against it — installing Kueue (if not already present), sizing and applying a
+`ResourceFlavor`/`ClusterQueue`/`LocalQueue` from the cluster's real node capacity (or from the
+optional `quota_config` override, if given), and applying the backend's job-running RBAC. This is
+generic, pure-`kubernetes_asyncio` logic that works against **any**
 `K8sClient`, regardless of `cluster_type` — a plugin's `ClusterProvider` gets this for free just by
 returning a working `K8sClient` from `connect()`; it never needs to install Kueue or apply RBAC
 itself. See the host repo's `docs/architecture/registry.md` and
@@ -388,18 +418,20 @@ class flag and exposed through two optional async methods:
   only on a first-ever deploy).
 - `expose_app(k8s_client, provider_config, namespace, app_config) -> dict` (async) — the
   **genuinely provider-specific part**: how external traffic reaches the app and whether/how TLS is
-  terminated. Returns `{"url": str, ...}`. Core's `same-as-backend`/`minikube` implement it as a
-  NodePort `Service` (parameterized from `app_config`, e.g. `FRONTEND_NODE_PORT`/`SERVER_URL`); a
+  terminated. Returns `{"url": str, ...}`. `same-as-backend` (core) and `minikube` (the cluster
+  type shipped by `plugins/ymerflow-minikube`) both implement it as a NodePort `Service`
+  (parameterized from `app_config`, e.g. `FRONTEND_NODE_PORT`/`SERVER_URL`); a
   cloud cluster type implements it against whatever managed load balancer / certificate / Ingress
   that cloud offers, reading `app_config["APP_DOMAIN"]` if it wants a hostname to request a
   certificate for. The host threads `APP_DOMAIN` through unchanged and does not interpret it.
 
-Core ships two reference implementations of this, both via a shared
-`NodePortAppDeploymentMixin` (`backend/services/cluster_providers/nodeport_app_deployment.py`):
-`same-as-backend` and `minikube`. A plugin adding a cloud cluster type implements the same two
-methods for its own provider — the same relationship a plugin's `bootstrap()` has to the registry/
-storage/cluster axes: core defines the hook and a reference implementation, the plugin implements
-it for its cluster.
+Core ships one reference implementation of this, `same-as-backend`, via a shared
+`NodePortAppDeploymentMixin` (`backend/services/cluster_providers/nodeport_app_deployment.py`).
+`plugins/ymerflow-minikube`'s `minikube` cluster type reuses the identical mixin unchanged (it
+only differs in `connect()`/`bootstrap()`), which is itself a good example for a plugin adding a
+cloud cluster type: implement `deploy_app()`/`expose_app()` for your own provider — the same
+relationship a plugin's `bootstrap()` has to the registry/storage/cluster axes: core defines the
+hook and a reference implementation, the plugin implements it for its cluster.
 
 ```python
 from backend.services.cluster_providers import ClusterProvider
@@ -436,35 +468,47 @@ the full design.
 
 ## Storage hooks
 
-### `select_storage`
+### `select_storage_backends`
 
-Picks which `StorageBackend` a newly created project provisions its bucket on. Unlike
-`select_clusters` (a set of allowed options), this hook picks exactly **one** answer, so it uses
-the `run_first` runner: the first plugin to return a non-`None` id wins, and if none do, the
-platform default is used.
+Restricts which `StorageBackend`s a user may provision a new project's bucket on. This mirrors
+`select_clusters` exactly, down to the `any_registered` fallback semantics: if **no** plugin
+registers this hook, every active storage backend is allowed. If plugins are registered, the
+union of what they return is the allowed set — a registered hook that legitimately returns an
+empty set means "no backends allowed," not "fall back to all."
 
-- **Caller:** `backend/routers/projects.py` project-creation handler — `hooks.run_first.select_storage(default_storage_backend_id, db, user, project)`
-- **Runner:** `run_first` (returns first non-`None` result, else the `default` argument)
+- **Caller:** `backend/models/storage_backend.py` `get_allowed_storage_backends()` — `await hooks.run_async.select_storage_backends(db, user)`. Called from both `GET
+  /projects/{project_id}/utilities/available-storage-backends` (`backend/routers/utilities.py`,
+  populates the picker the frontend calls before project creation) and the project-creation
+  handler itself (`backend/routers/projects.py`, re-checks the chosen id is actually in the
+  allowed set before provisioning)
+- **Runner:** `run_async` (coroutines are awaited) — plugin implementations must define this hook
+  as `async def`
 - **Parameters:**
-  - `default` (`str`) — the platform's configured default storage backend id (passed positionally before the rest)
   - `db` (`sqlalchemy.ext.asyncio.AsyncSession`) — active database session
-  - `user` (`backend.models.User`) — the user creating the project
-  - `project` (`backend.models.Project`) — the new project (already flushed, has an `id`, not yet committed)
-- **Returns:** `str | None` — a `StorageBackend.id`, or `None` to defer to the next plugin / the default
+  - `user` (`backend.models.User`) — the requesting user
+- **Returns:** `list[str]` — storage backend ids this plugin allows; the union across all
+  registered plugins is the final allowed set
 
 ```python
-def select_storage(default, db, user, project):
+async def select_storage_backends(db, user):
     if user.billing_account and user.billing_account.plan == "enterprise":
-        return "dedicated-backend-id"
-    return None  # defer to the platform default
+        return ["dedicated-backend-id"]
+    return ["shared-backend-id"]
 ```
+
+This is one of two matching "restrict to an allow-list" hooks — `select_clusters` (above) is the
+other, for `Cluster` rather than `StorageBackend`. Both share the same shape: `run_async`, union of
+plugin results, `any_registered`-gated fallback to "everything active" when no plugin answers at
+all.
 
 ### `storage_protocol_handlers`
 
-Registers `StorageProtocolHandler` implementations for `StorageBackend.protocol` values (e.g.
-`minio`, `gcs`, `s3`). Core registers its own built-in handlers through this exact same hook (see
-the host's root `setup.py`) — a plugin adding a new protocol (e.g. Azure) uses the identical
-channel core does, with no "core is special" path.
+Registers `StorageProtocolHandler` implementations for `StorageBackend.protocol` values. Core
+registers only one built-in handler, `s3`, through this exact same hook (see the host's root
+`setup.py`) — a plugin adding a new protocol uses the identical channel core does, with no "core
+is special" path. `minio` (`plugins/ymerflow-minikube`), `gcs` (`plugins/ymerflow-gcp`), and `az`
+(`plugins/ymerflow-azure`) are examples of plugins doing exactly that, not anything core provides
+— a stock install without those plugins has only `s3` available.
 
 - **Caller:** `backend/services/storage_protocols/__init__.py` `get_protocol_handler()` — `hooks.run.storage_protocol_handlers()`
 - **Runner:** `run` (synchronous)
@@ -484,9 +528,11 @@ The fields a `StorageProtocolHandler` cares about:
 #### `StorageProtocolHandler` base class
 
 `backend.services.storage_protocols.StorageProtocolHandler` — subclass this and register an
-instance's class via `storage_protocol_handlers`. All four methods are **required** (no
-defaults — protocols are too different from each other for a shared implementation, unlike
-`ClusterProvider.test_connection`):
+instance's class via `storage_protocol_handlers`. The core operational methods (`provision`,
+`mint`, `test_connection`, `storage_base_url`, `fsspec_kwargs`, `admin_credentials`) are
+**required** (no defaults — protocols are too different from each other for a shared
+implementation, unlike `ClusterProvider.test_connection`); `bootstrap`/`teardown` follow the same
+optional, passthrough-by-default pattern as the other two axes.
 
 - `provision(project, backend) -> dict` (sync) — one-time setup at project creation: bucket /
   service-account / policy creation. Returns credentials to persist for `static-key` use, or `{}`
@@ -496,8 +542,33 @@ defaults — protocols are too different from each other for a shared implementa
   non-`static-key` credential strategy.
 - `test_connection(backend) -> None` (async) — validate connectivity/credentials only, no side
   effects; safe to call repeatedly from the admin UI before any project exists to provision for.
+- `storage_base_url(project, backend) -> str` (sync) — the `<scheme>://…` root a project's data
+  lives under on this backend. One bucket per project, on every protocol, no exceptions — this
+  *is* the access-control boundary: `<scheme>://<bucket_prefix><project_id>`. The bucket name
+  embeds `project_id` so a bucket can be reverse-resolved back to its owning project.
+- `fsspec_kwargs(backend, credentials, for_pod: bool = False) -> dict` (sync) — the fsspec kwargs
+  to pass to `fsspec.open(url, **kwargs)`/`fsspec.filesystem(proto, **kwargs)` for the given
+  credential set. Called with admin credentials (`admin_credentials(backend)`) for trusted
+  backend-side I/O, and with project-scoped credentials for the untrusted pod/runner — the same
+  code path serves both, with the caller choosing which creds to pass. `for_pod=True` signals the
+  kwargs are for a job pod (in-cluster), so a handler whose pod-facing endpoint differs from its
+  backend-facing one (e.g. MinIO's dev localhost vs. the in-cluster service DNS) can translate;
+  handlers where the endpoint is the same everywhere (GCS/S3) ignore it.
+- `admin_credentials(backend) -> dict` (sync) — the backend's own admin credential set, in the
+  same shape `provision()`/`mint()` return (i.e. what `fsspec_kwargs(backend, credentials)`
+  expects) — used for backend-side/trusted I/O, which is allowed to read/write any project's
+  bucket on this backend because the backend enforces its own access control.
 - `bootstrap(config: dict) -> dict` (sync) — see [The `bootstrap()` provisioning
   flow](#the-bootstrap-provisioning-flow) below.
+- `teardown(config: dict) -> None` (sync) — the mirror of `bootstrap()`: removes the k8s-level
+  resources `bootstrap()` created (namespaces, Deployments, Services, PV/PVC, etc.). Default is a
+  no-op passthrough, exactly like `bootstrap()`'s default for core-provided handlers — a protocol
+  that provisions nothing local (a managed object store) tears nothing down. Must be idempotent
+  (safe to call when nothing is provisioned).
+- `SECRET_CONFIG_KEYS` (class attribute, default `None`) — names of `config` keys that hold
+  credential/secret material and must be masked as `"****"` in admin API responses. `None` (the
+  default) means "mask every key" — the conservative default for any handler, including
+  third-party plugins, that hasn't explicitly opted a key out.
 
 ```python
 from backend.services.storage_protocols import StorageProtocolHandler
@@ -530,8 +601,9 @@ def storage_protocol_handlers():
     return [("azure", AzureProtocolHandler)]
 ```
 
-This mirrors the built-in `MinioProtocolHandler` (`backend/services/storage_protocols/minio.py`)
-almost exactly — reading connection config from `backend.config` (never from global settings) is
+This mirrors `plugins/ymerflow-minikube`'s `MinioProtocolHandler`
+(`plugins/ymerflow-minikube/minikube_plugin/storage_protocol.py`) almost exactly — reading
+connection config from `backend.config` (never from global settings) is
 the load-bearing convention: it's what lets an admin register multiple backends of the same
 protocol (e.g. two separate MinIO clusters) and have each provision independently.
 
@@ -543,13 +615,15 @@ to its own SDK directly (e.g. `minio.Minio`, `google.cloud.storage`) inside `pro
 
 ### `registry_protocol_handlers`
 
-Registers `RegistryProtocolHandler` implementations for `RegistryBackend.protocol` values (e.g.
-`docker-v2`, `gar`). This is the third pluggable-backend axis, mirroring `storage_protocol_handlers`
-and `cluster_provider_handlers` exactly — one active `RegistryBackend` row is used app-wide (there
-is only ever one registry, not one per project or per cluster). Core registers its own built-in
-handler (`docker-v2`, wrapping a self-hosted Docker Registry v2 instance) through this exact same
-hook (see the host's root `setup.py`) — a plugin adding a new protocol (e.g. Google Artifact
-Registry) uses the identical channel core does, with no "core is special" path.
+Registers `RegistryProtocolHandler` implementations for `RegistryBackend.protocol` values. This is
+the third pluggable-backend axis, mirroring `storage_protocol_handlers` and
+`cluster_provider_handlers` exactly — one active `RegistryBackend` row is used app-wide (there is
+only ever one registry, not one per project or per cluster). Core registers **no** registry
+protocol of its own — `registry_protocol_handlers()` returns `[]` in core (see the host's root
+`setup.py`); a stock install needs a plugin for any registry option at all. `docker-v2` (wrapping a
+self-hosted Docker Registry v2 instance, shipped by `plugins/ymerflow-minikube`) and `gar` (Google
+Artifact Registry, shipped by `plugins/ymerflow-gcp`) are examples of plugins using this exact same
+hook channel core would use if it registered anything itself, with no "core is special" path.
 
 - **Caller:** `backend/services/registry_protocols/__init__.py` `get_registry_protocol_handler()` — `hooks.run.registry_protocol_handlers()`
 - **Runner:** `run` (synchronous)
@@ -566,13 +640,23 @@ The single, app-wide registry configuration is a `RegistryBackend` row
 #### `RegistryProtocolHandler` base class
 
 `backend.services.registry_protocols.RegistryProtocolHandler` — subclass this and register an
-instance's class via `registry_protocol_handlers`. All five methods are **required** (no defaults —
-same rationale as `StorageProtocolHandler`: protocols are too different from each other for a
-shared implementation):
+instance's class via `registry_protocol_handlers`. The core operational methods (`image_url`,
+`image_prefix`, `pull_credentials`, `configure_push_auth`, `push_image`, `test_connection`) are
+**required** (no defaults — same rationale as `StorageProtocolHandler`: protocols are too
+different from each other for a shared implementation); `bootstrap`/`teardown` follow the same
+optional, passthrough-by-default pattern as the other two axes.
 
 - `image_url(config: dict, repository: str, tag: str) -> str` (sync) — the single place address
   *shape* is decided (mirrors `StorageProtocolHandler.storage_base_url`). `docker-v2` returns
-  `host:port/repository:tag`.
+  `host:port/repository:tag`. Every implementation is expected to return exactly
+  `f"{self.image_prefix(config)}/{repository}:{tag}"`.
+- `image_prefix(config: dict) -> str` (sync) — the part of `image_url()`'s address that comes
+  before `/{repository}:{tag}`. `docker-v2` returns `host:port`; `gar` returns
+  `location-docker.pkg.dev/project_id/repository` (GAR addresses under one fixed, bootstrapped
+  repository — there is no bare host you can push arbitrary repository names under, unlike
+  docker-v2's self-hosted registry). Callers that need to build a new image reference under a
+  caller-chosen name (rather than calling `image_url()` with an already-known
+  repository/tag) use this instead of assuming `image_url()`'s shape is just a host.
 - `pull_credentials(config: dict) -> dict` (async) — resolve a pod image-pull credential. Returns
   `{"username": str, "password": str, "expires_at": datetime | None}`. Called by the host **per
   Job**, at Job-creation time, not once and cached — the host mints an ephemeral, Job-scoped
@@ -583,24 +667,44 @@ shared implementation):
   doesn't currently re-mint mid-Job on expiry, since `pull_credentials()` is only ever called once,
   at Job-creation time, so an `expires_at` shorter than a Job's expected runtime isn't useful yet.
 - `configure_push_auth(config: dict) -> None` (sync) — perform whatever local `docker login` /
-  credential-helper setup push-side tooling needs before a `docker push`. Called by the host-side
-  `backend/bin/nagelfluh-registry-push <repository> <tag>` entry point, which
-  `docker/build.sh`-equivalent tooling shells out to instead of hardcoding any protocol's push
-  mechanics itself.
+  credential-helper setup push-side tooling needs before a `docker push`. This is **not** called by
+  the host directly — it's a helper a protocol's own `push_image()` implementation may call into
+  internally if it needs it (e.g. the GCP plugin's `GarProtocolHandler.push_image()` calls its own
+  `configure_push_auth()` to mint the OAuth2 token it then uses); `docker-v2` does today's `docker
+  login host:port -u ... -p ...` inside its own `push_image()`.
+- `push_image(local_image_ref: str, config: dict, repository: str, tag: str) -> str` (sync) — push
+  a locally-built image (already present in the host's own Docker daemon, tagged
+  `local_image_ref`) to this backend, resolving it under `repository:tag`. Returns the full pushed
+  ref, mirroring `image_url()`'s return shape (every implementation is expected to return exactly
+  `self.image_url(config, repository, tag)`). This is the real push entry point and is
+  self-contained — it owns whatever authentication and TLS handling the push needs. The generic
+  build-and-push entry point (`backend/bin/nagelfluh-build-and-push`) calls only this, never a
+  separate `configure_push_auth()` step. `docker-v2` shells out to `docker save` + `crane push
+  --insecure` with its own throwaway auth config, precisely so it does not depend on the host
+  Docker daemon trusting its self-signed cert; a protocol backed by a real CA-issued cert (`gar`,
+  `acr`) instead implements this as a plain `docker login`/`docker tag`/`docker push`.
 - `test_connection(config: dict) -> None` (async) — raise a clear exception if this config can't
   actually reach/authenticate against a registry. No default implementation, same rationale as
   `StorageProtocolHandler.test_connection`.
 - `bootstrap(config: dict) -> dict` (sync) — see [The `bootstrap()` provisioning
   flow](#the-bootstrap-provisioning-flow) below.
+- `teardown(config: dict) -> None` (sync) — the mirror of `bootstrap()`: removes the k8s-level
+  resources `bootstrap()` created (namespaces, Deployments, Services, etc.). Default is a no-op
+  passthrough, exactly like `bootstrap()`'s default for core-provided handlers — a protocol that
+  provisions nothing local (a managed registry) tears nothing down. Must be idempotent (safe to
+  call when nothing is provisioned).
 
 ```python
 from backend.services.registry_protocols import RegistryProtocolHandler
 
 class GarProtocolHandler(RegistryProtocolHandler):
-    def image_url(self, config: dict, repository: str, tag: str) -> str:
+    def image_prefix(self, config: dict) -> str:
         # config is this RegistryBackend row's own config dict — e.g. {"location": "us",
         # "project": "my-gcp-project", "repository": "nagelfluh"}
-        return f"{config['location']}-docker.pkg.dev/{config['project']}/{config['repository']}/{repository}:{tag}"
+        return f"{config['location']}-docker.pkg.dev/{config['project']}/{config['repository']}"
+
+    def image_url(self, config: dict, repository: str, tag: str) -> str:
+        return f"{self.image_prefix(config)}/{repository}:{tag}"
 
     async def pull_credentials(self, config: dict) -> dict:
         token, expires_at = await mint_gcp_access_token(config)
@@ -608,6 +712,14 @@ class GarProtocolHandler(RegistryProtocolHandler):
 
     def configure_push_auth(self, config: dict) -> None:
         run_gcloud_auth_configure_docker(config)
+
+    def push_image(self, local_image_ref: str, config: dict, repository: str, tag: str) -> str:
+        # GAR presents a publicly-trusted cert, so a plain docker-side push works directly.
+        self.configure_push_auth(config)
+        ref = self.image_url(config, repository, tag)
+        run(["docker", "tag", local_image_ref, ref])
+        run(["docker", "push", ref])
+        return ref
 
     async def test_connection(self, config: dict) -> None:
         await asyncio.to_thread(lambda: verify_gar_repository_reachable(config))
@@ -625,7 +737,7 @@ def registry_protocol_handlers():
 ```
 
 There is no shared "registry client" class analogous to `K8sClient` — each protocol handler talks
-to its own SDK/CLI directly inside its five methods; only the `RegistryProtocolHandler` method
+to its own SDK/CLI directly inside its own methods; only the `RegistryProtocolHandler` method
 shape is standardized. Unlike `docker-v2` (which keeps CA-pinning logic for its self-signed
 certificate internal to its own handler), the ABC itself has **no concept of CA pinning or any
 other TLS-trust mechanism** — a protocol with a normally CA-issued cert (like a real managed
@@ -637,12 +749,15 @@ All three pluggable-backend axes — `RegistryProtocolHandler`, `StorageProtocol
 `ClusterProvider` — share one more method beyond their protocol-specific operations:
 `bootstrap(config: dict) -> dict` (storage/registry call the parameter `config`; `ClusterProvider`
 calls it `provider_config` — same shape, different name to match each axis's existing
-terminology). Every **core-provided** protocol/provider (`docker-v2`, `minio`, `s3`,
-`same-as-backend`, `kubeconfig`, `minikube`) implements this as a pure passthrough
-(`return config`) — there is nothing for core to provision, since core's registry/storage/cluster
-are all stood up by separate setup scripts, not by this hook. A plugin protocol is free to do real
-work here instead: provision a fresh cloud resource, mint a first credential, or anything else
-config.env-driven setup should trigger automatically.
+terminology). Every **core-provided** protocol/provider — `s3` (storage), `same-as-backend` and
+`kubeconfig` (cluster); core registers no registry protocol at all — implements this as a pure
+passthrough (`return config`) — there is nothing for core to provision, since core's cluster/
+storage are stood up by separate setup scripts, not by this hook. A plugin protocol is free to do
+real work here instead: provision a fresh cloud resource, mint a first credential, or anything else
+config.env-driven setup should trigger automatically. `plugins/ymerflow-minikube`'s `minio`,
+`docker-v2`, and `minikube` handlers are a live example of exactly that — their `bootstrap()`
+brings up the host's own Minikube VM plus a MinIO/registry Deployment and returns real, freshly
+minted credentials, not a passthrough.
 
 **How it gets invoked.** The host application's `backend/bin/nagelfluh-bootstrap-provision` (a
 standalone script, not a FastAPI route) is the one and only caller. For each axis, if the operator

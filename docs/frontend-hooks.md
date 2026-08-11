@@ -220,8 +220,9 @@ registerHook('fullscreen_pages', () => [
 ### `cluster_provider_forms`
 
 Provide the connection-config form shown in the admin Clusters panel for a given
-`Cluster.cluster_type`. Core registers its own built-in forms (`same-as-backend`, `kubeconfig`,
-`minikube`) through this exact same hook — a plugin adding a new cluster type pairs a
+`Cluster.cluster_type`. Core registers its own built-in forms (`same-as-backend`, `kubeconfig`)
+through this exact same hook — `minikube` is registered by the `ymerflow-minikube` plugin's own
+frontend bundle, not core. A plugin adding a new cluster type pairs a
 `cluster_provider_forms` entry here with a backend `cluster_provider_handlers` registration (see
 [backend hooks](backend-hooks.md#cluster_provider_handlers)) for the matching `type`.
 
@@ -241,8 +242,9 @@ registerHook('cluster_provider_forms', () => [
 ### `storage_protocol_forms`
 
 Provide the connection-config form shown in the admin Storage Backends panel for a given
-`StorageBackend.protocol`. Core registers its own built-in forms (`minio`, `gcs`, `s3`) through
-this exact same hook — a plugin adding a new protocol pairs a `storage_protocol_forms` entry here
+`StorageBackend.protocol`. Core registers its own built-in form (`s3`) through this exact same
+hook — `minio` is registered by the `ymerflow-minikube` plugin's own frontend bundle, not core. A
+plugin adding a new protocol pairs a `storage_protocol_forms` entry here
 with a backend `storage_protocol_handlers` registration (see
 [backend hooks](backend-hooks.md#storage_protocol_handlers)) for the matching `type`.
 
