@@ -317,7 +317,7 @@ class via `cluster_provider_handlers`.
   provider whose hostname doesn't need a reservation step (`same-as-backend`/`minikube`) never
   needs to override this.
 - `supports_app_deployment` (class attribute, default `False`), `deploy_app(...)` /
-  `expose_app(...)` (async, optional) — the hook for a provider that can also **host the Nagelfluh
+  `expose_app(...)` (async, optional) — the hook for a provider that can also **host the Ymerflow
   application itself** (backend + frontend pods, their config/secrets, their exposure) on its
   cluster, not just run process/analysis Jobs on it. See [Hosting the app: `deploy_app()` /
   `expose_app()`](#hosting-the-app-deploy_app--expose_app) below.
@@ -335,7 +335,7 @@ class GkeClusterProvider(ClusterProvider):
     def bootstrap(self, provider_config: dict) -> dict:
         # Most providers never need this — return provider_config unchanged, exactly like every
         # core-provided provider does. Only implement live provisioning here if config.env-driven
-        # setup (via nagelfluh-bootstrap-provision) should do more than just persist the given
+        # setup (via yf-bootstrap-provision) should do more than just persist the given
         # config as-is — e.g. actually creating a GKE cluster here and folding its resulting
         # kubeconfig into the returned provider_config.
         return provider_config
@@ -385,7 +385,7 @@ itself. See the host repo's `docs/architecture/registry.md` and
 #### Hosting the app: `deploy_app()` / `expose_app()`
 
 Everything above is about running **process/analysis Jobs** on a cluster. A `ClusterProvider` can
-*optionally* also host the **Nagelfluh application itself** — the backend + frontend pods, their
+*optionally* also host the **Ymerflow application itself** — the backend + frontend pods, their
 workload-level config/secrets, the DB migration, and how external traffic reaches them — on the
 very same `Cluster` row job execution already resolves. There is no separate "which cluster hosts
 the app" model: app hosting always targets the same `Cluster` that `connect()` resolves (host
@@ -402,14 +402,14 @@ class flag and exposed through two optional async methods:
   existed.
 - `deploy_app(k8s_client, provider_config, namespace, images, app_config, secrets) -> None`
   (async) — apply the app's workload-level resources: the backend + frontend `Deployment`/
-  `Service`, the `nagelfluh-backend-config`/`nagelfluh-backend-secret` `ConfigMap`/`Secret`, and
+  `Service`, the `ymerflow-backend-config`/`ymerflow-backend-secret` `ConfigMap`/`Secret`, and
   the DB migration `Job`. This work is **identical for every provider**, so an implementation
   delegates it to the shared host helper
   `backend.services.app_deployment.apply_app_workloads(k8s_client, namespace, images, app_config,
   secrets, image_pull_credentials=..., replicas=...)` — the same "shared utility, not part of the
   ABC" shape as `ensure_cluster_job_ready()`. Your `deploy_app()`'s own job is only to resolve the
   provider-specific inputs (e.g. how images are made pullable on this cluster) and call the helper.
-  `namespace` here is the **app** namespace (e.g. `nagelfluh`), distinct from `Cluster.namespace`
+  `namespace` here is the **app** namespace (e.g. `ymerflow`), distinct from `Cluster.namespace`
   (the *jobs* namespace). `images` is `{"backend": ..., "frontend": ...}` of already-resolved
   `RegistryProtocolHandler.image_url()` strings — app images go through the [registry
   axis](#registry-hooks), never `imagePullPolicy: Never`. `secrets` must include a fully-resolved
@@ -461,7 +461,7 @@ class GkeClusterProvider(ClusterProvider):
 ```
 
 The host resolves the default `Cluster`'s provider and calls these two methods from its
-`backend/bin/nagelfluh-deploy-app` orchestration entry point (run as an in-cluster Job in the
+`backend/bin/yf-deploy-app` orchestration entry point (run as an in-cluster Job in the
 prod-minikube flow). A plugin never invokes them itself — it only implements them; the host's
 entry point is the single call site. See the host repo's `docs/plans/app-deployment-hooks.md` for
 the full design.
@@ -592,7 +592,7 @@ class AzureProtocolHandler(StorageProtocolHandler):
     def bootstrap(self, config: dict) -> dict:
         # Most protocols never need this — return config unchanged, exactly like every
         # core-provided handler does. Only implement live provisioning here if config.env-driven
-        # setup (via nagelfluh-bootstrap-provision) should do more than just persist the given
+        # setup (via yf-bootstrap-provision) should do more than just persist the given
         # config as-is — e.g. creating a storage account here and folding its keys into the
         # returned config.
         return config
@@ -678,7 +678,7 @@ optional, passthrough-by-default pattern as the other two axes.
   ref, mirroring `image_url()`'s return shape (every implementation is expected to return exactly
   `self.image_url(config, repository, tag)`). This is the real push entry point and is
   self-contained — it owns whatever authentication and TLS handling the push needs. The generic
-  build-and-push entry point (`backend/bin/nagelfluh-build-and-push`) calls only this, never a
+  build-and-push entry point (`backend/bin/yf-build-and-push`) calls only this, never a
   separate `configure_push_auth()` step. `docker-v2` shells out to `docker save` + `crane push
   --insecure` with its own throwaway auth config, precisely so it does not depend on the host
   Docker daemon trusting its self-signed cert; a protocol backed by a real CA-issued cert (`gar`,
@@ -700,7 +700,7 @@ from backend.services.registry_protocols import RegistryProtocolHandler
 class GarProtocolHandler(RegistryProtocolHandler):
     def image_prefix(self, config: dict) -> str:
         # config is this RegistryBackend row's own config dict — e.g. {"location": "us",
-        # "project": "my-gcp-project", "repository": "nagelfluh"}
+        # "project": "my-gcp-project", "repository": "ymerflow"}
         return f"{config['location']}-docker.pkg.dev/{config['project']}/{config['repository']}"
 
     def image_url(self, config: dict, repository: str, tag: str) -> str:
@@ -727,7 +727,7 @@ class GarProtocolHandler(RegistryProtocolHandler):
     def bootstrap(self, config: dict) -> dict:
         # Live-provisioning example (unlike the passthrough examples elsewhere in this doc):
         # config.env supplied just enough to know WHICH GAR repository to use; this creates it
-        # if it doesn't exist yet and returns the enriched config nagelfluh-bootstrap-provision
+        # if it doesn't exist yet and returns the enriched config yf-bootstrap-provision
         # persists onto the RegistryBackend row.
         ensure_gar_repository_exists(config)
         return config
@@ -759,7 +759,7 @@ config.env-driven setup should trigger automatically. `plugins/ymerflow-minikube
 brings up the host's own Minikube VM plus a MinIO/registry Deployment and returns real, freshly
 minted credentials, not a passthrough.
 
-**How it gets invoked.** The host application's `backend/bin/nagelfluh-bootstrap-provision` (a
+**How it gets invoked.** The host application's `backend/bin/yf-bootstrap-provision` (a
 standalone script, not a FastAPI route) is the one and only caller. For each axis, if the operator
 set a matching pair of environment variables in `config.env` —
 `REGISTRY_PROTOCOL`/`REGISTRY_CONFIG_JSON`, `STORAGE_PROTOCOL`/`STORAGE_CONFIG_JSON`, or
