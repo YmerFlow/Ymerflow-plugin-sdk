@@ -1,7 +1,7 @@
 # Frontend Hook Reference
 
 Frontend hooks are registered with `registerHook(name, fn)` (from `ymerflow-plugin-sdk` or
-`window.__nagelfluh_registerHook`). Each registration adds a callback `fn` to the named hook;
+`window.__ymerflow_registerHook`). Each registration adds a callback `fn` to the named hook;
 when the host calls that hook it collects the concatenated return values of all registered
 callbacks. Hooks come in three runner flavours:
 

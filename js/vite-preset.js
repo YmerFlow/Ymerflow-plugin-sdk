@@ -1,7 +1,7 @@
 // ymerflow-plugin-sdk/vite-preset — the Module-Federation Vite preset used by the build harness.
 //
 // It reads the host's shared-singleton versions (injected at build time via the
-// NAGELFLUH_SHARED_VERSIONS env var as JSON) and emits the MF `shared` config pinned to them, so a
+// YMERFLOW_SHARED_VERSIONS env var as JSON) and emits the MF `shared` config pinned to them, so a
 // plugin author writes NO Module-Federation / Vite config. The same preset is used whether the
 // plugin is built in a `build_frontend_plugin` Process or by a backend plugin's `setup.py`.
 //
@@ -11,7 +11,7 @@
 //   export default defineConfig({ plugins: [ ...ymerflowFederation({ name, entry }) ] })
 //
 // The `shared` block this preset emits is the SINGLE SOURCE OF TRUTH for the MF shared config. The
-// Python build harness (`nagelfluh_plugin_build.build._shared_block`) produces an identical shape;
+// Python build harness (`ymerflow_plugin_build.build._shared_block`) produces an identical shape;
 // `tests/test_vite_preset_consistency.py` asserts they stay in lock-step so the documented preset
 // never drifts from the config the harness actually emits. The heavy Vite plugin imports are loaded
 // lazily inside `ymerflowFederation` so the pure `sharedConfig`/`hostSharedVersions` helpers can be
@@ -25,12 +25,12 @@ export const DEFAULT_SHARED = {
 }
 
 export function hostSharedVersions() {
-  const raw = (typeof process !== 'undefined' && process.env && process.env.NAGELFLUH_SHARED_VERSIONS) || ''
+  const raw = (typeof process !== 'undefined' && process.env && process.env.YMERFLOW_SHARED_VERSIONS) || ''
   if (!raw) return { ...DEFAULT_SHARED }
   try {
     return JSON.parse(raw)
   } catch (e) {
-    console.warn('[ymerflow-plugin-sdk] could not parse NAGELFLUH_SHARED_VERSIONS; using defaults')
+    console.warn('[ymerflow-plugin-sdk] could not parse YMERFLOW_SHARED_VERSIONS; using defaults')
     return { ...DEFAULT_SHARED }
   }
 }

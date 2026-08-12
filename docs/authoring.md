@@ -8,7 +8,7 @@ For publishing/serving, see [distributing & building](distributing.md).
 
 ```
 my-nagelfluh-plugin/
-  package.json        ← npm manifest: peerDependencies + nagelfluh.remoteName/entry
+  package.json        ← npm manifest: peerDependencies + ymerflow.remoteName/entry
   src/
     index.js          ← entry point; registers everything as side effects
     MyDataset.js
@@ -20,7 +20,7 @@ my-nagelfluh-plugin/
 
 Shared deps go in `peerDependencies` (the host provides them as MF singletons — the build pins them
 to the host's exact versions); any other dependency is a normal `dependency` and gets bundled. The
-`nagelfluh` block names the MF remote and points at the **source** entry module.
+`ymerflow` block names the MF remote and points at the **source** entry module.
 
 ```jsonc
 {
@@ -32,7 +32,7 @@ to the host's exact versions); any other dependency is a normal `dependency` and
   },
   "dependencies": { "some-lib": "^2.0.0" },
   "devDependencies": { "ymerflow-plugin-sdk": "^1.0.0" },
-  "nagelfluh": {
+  "ymerflow": {
     "remoteName": "skytem_plugin",   // MF remote name == Plugin.name
     "entry": "src/index.js"          // source entry the build harness exposes
   }
@@ -79,4 +79,4 @@ Each `registerHook(name, fn)` call appends a callback to the named hook. See
 callback must return.
 
 A backend plugin additionally registers Python callables as setuptools entry points in the
-`nagelfluh.hooks` group — see [backend hooks](backend-hooks.md).
+`ymerflow.hooks` group — see [backend hooks](backend-hooks.md).

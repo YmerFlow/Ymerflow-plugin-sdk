@@ -32,6 +32,6 @@ Both register through the **same** `registerHook` API and serve content-addresse
 > so plugin authors can see exactly where and how each hook is invoked.
 
 > **Note on contract names.** The runtime bridge / marker names shared with the host
-> (`window.__nagelfluh_registerHook`, the `nagelfluh.hooks` entry-point group, the
-> `nagelfluh.remoteName` `package.json` key) keep their original `nagelfluh` spelling on purpose —
-> renaming them would break the running host. See the SDK [README](../README.md#host-contract-names-intentionally-not-ymerflow-prefixed).
+> (`window.__ymerflow_registerHook`, the `ymerflow.hooks` entry-point group, the
+> `ymerflow.remoteName` `package.json` key) use the `ymerflow` spelling, renamed together with the
+> host, SDK, and all plugins in one coordinated change. See the SDK [README](../README.md#host-contract-names).

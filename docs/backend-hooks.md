@@ -1,14 +1,14 @@
 # Backend Hook Reference
 
 Backend hooks are implemented as Python functions or coroutines registered as **setuptools entry
-points** in the `nagelfluh.hooks` group. The entry point **name** selects the hook; the value
+points** in the `ymerflow.hooks` group. The entry point **name** selects the hook; the value
 points to the callable. Only [backend plugins](README.md) (pip-installed Python packages) can
 provide these.
 
 ```python
 # setup.py / pyproject.toml
 entry_points={
-    'nagelfluh.hooks': [
+    'ymerflow.hooks': [
         'register_routers = my_plugin:register_routers',
         'frontend_bundles  = my_plugin:frontend_bundles',
     ],
@@ -100,7 +100,7 @@ inside the Python package (built at `pip install` time, not in a Kubernetes pod)
 - **Parameters:** none
 - **Returns:** `list[dict]` — each dict may contain:
   - `dist_dir` (str, **required**) — absolute path to the compiled `dist/` directory on disk
-  - `name` (str, optional) — Module Federation remote name; falls back to `package.json`'s `nagelfluh.remoteName`
+  - `name` (str, optional) — Module Federation remote name; falls back to `package.json`'s `ymerflow.remoteName`
   - `display_name` (str, optional) — human-readable label shown in the Plugin Manager; falls back to `name`
 
 ```python

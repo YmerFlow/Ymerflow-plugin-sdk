@@ -5,7 +5,7 @@ registry=None, mode=None)`` resolves the npm package — from a server-local sou
 the public npm registry (see :func:`resolve_npm_source` and ``PLUGIN_NPM_SOURCE_MODE``) — installs
 it with ``npm install``, generates a Module-Federation Vite config whose ``shared`` block is pinned
 to the host's exact singleton versions, runs ``vite build``, and copies the resulting MF remote
-(``remoteEntry.js`` + chunks + a ``package.json`` carrying ``nagelfluh.remoteName`` and
+(``remoteEntry.js`` + chunks + a ``package.json`` carrying ``ymerflow.remoteName`` and
 ``built_against``) into ``out_dir``.
 
 Source resolution supports BOTH delivery mechanisms (see docs/plans/plugin-npm-source-resolution-plan.md):
@@ -275,7 +275,7 @@ export default defineConfig({{
     dist_manifest = {
         "name": plugin_pkg["name"],
         "version": plugin_pkg.get("version", "0.0.0"),
-        "nagelfluh": {
+        "ymerflow": {
             "remoteName": remote_name,
             "entry": entry,
         },
@@ -348,11 +348,11 @@ def build_frontend(npm_name, npm_version, out_dir,
                 f"Resolved source declares name {plugin_pkg.get('name')!r} but {npm_name!r} requested."
             )
 
-        nf = plugin_pkg.get("nagelfluh") or {}
+        nf = plugin_pkg.get("ymerflow") or {}
         remote_name = nf.get("remoteName")
         if not remote_name:
             raise PluginBuildError(
-                f"Plugin {npm_name!r} package.json has no nagelfluh.remoteName — cannot build an MF remote."
+                f"Plugin {npm_name!r} package.json has no ymerflow.remoteName — cannot build an MF remote."
             )
         entry = nf.get("entry", "src/index.js")
 

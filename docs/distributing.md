@@ -62,14 +62,14 @@ setup(
     name='my-backend-plugin',
     cmdclass={'build_py': BuildWithFrontend},
     package_data={'my_backend_plugin': ['frontend_dist/**/*']},
-    entry_points={'nagelfluh.hooks': [
+    entry_points={'ymerflow.hooks': [
         'frontend_bundles = my_backend_plugin:frontend_bundles',
         'register_routers = my_backend_plugin:register_routers',
     ]},
 )
 ```
 
-The `nagelfluh.hooks` entry points are the [backend hooks](backend-hooks.md) the package provides;
+The `ymerflow.hooks` entry points are the [backend hooks](backend-hooks.md) the package provides;
 `frontend_bundles` is what makes the bundled `frontend_dist/` discoverable at startup.
 
 The running server never runs npm — the built output ships in the package and is content-addressed

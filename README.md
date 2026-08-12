@@ -45,15 +45,16 @@ import { registerHook } from 'ymerflow-plugin-sdk'
 registerHook('widgets', () => [{ name: 'MyWidget', component: MyWidget }])
 ```
 
-## Host-contract names (intentionally NOT `ymerflow`-prefixed)
+## Host-contract names
 
-These are the runtime bridge / marker names shared with the host app and the build pipeline. They are
-**deliberately left on their original `nagelfluh`/`NAGELFLUH` spelling** so the host frontend and the
-running cluster keep working; renaming them would be a breaking change, not an SDK rebrand:
+These are the runtime bridge / marker names shared with the host app and the build pipeline. They
+were previously frozen on their original `nagelfluh`/`NAGELFLUH` spelling while host, SDK, and
+plugins were rebranded independently; that freeze was lifted once all of them were renamed together
+in the same coordinated change, so the bridge now uses the `ymerflow`/`YMERFLOW` spelling:
 
-- `window.__nagelfluh_registerHook`, `window.__nagelfluh_hooks` — the host window bridge.
-- `nagelfluh.remoteName` — the package.json key a plugin uses to declare its MF remote name.
-- `NAGELFLUH_SHARED_VERSIONS` — env var the host injects with its shared-singleton versions.
+- `window.__ymerflow_registerHook`, `window.__ymerflow_hooks` — the host window bridge.
+- `ymerflow.remoteName` — the package.json key a plugin uses to declare its MF remote name.
+- `YMERFLOW_SHARED_VERSIONS` — env var the host injects with its shared-singleton versions.
 
 ## Documentation
 

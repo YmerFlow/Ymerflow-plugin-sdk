@@ -2,7 +2,7 @@
 //
 // A plugin's `src/index.js` imports `registerHook` (and optionally `hooks`/`useHook`) from here
 // and registers all its extensions as side effects of being imported. The host bridges its hook
-// runner onto `window.__nagelfluh_*` before any plugin loads, so the SDK is a thin, dependency-free
+// runner onto `window.__ymerflow_*` before any plugin loads, so the SDK is a thin, dependency-free
 // shim — there is exactly ONE hook registry (the host's) shared across host and all plugins.
 //
 //   import { registerHook } from 'ymerflow-plugin-sdk'
@@ -16,9 +16,9 @@ function host() {
 }
 
 export function registerHook(name, fn) {
-  const reg = host().__nagelfluh_registerHook
+  const reg = host().__ymerflow_registerHook
   if (typeof reg !== 'function') {
-    throw new Error('nagelfluh host bridge not initialised: window.__nagelfluh_registerHook missing.')
+    throw new Error('ymerflow host bridge not initialised: window.__ymerflow_registerHook missing.')
   }
   return reg(name, fn)
 }
@@ -26,8 +26,8 @@ export function registerHook(name, fn) {
 // The host's hook runner ({ run, run_async, run_jsx }). Available after the host has loaded.
 export const hooks = new Proxy({}, {
   get(_t, prop) {
-    const h = host().__nagelfluh_hooks
-    if (!h) throw new Error('nagelfluh host bridge not initialised: window.__nagelfluh_hooks missing.')
+    const h = host().__ymerflow_hooks
+    if (!h) throw new Error('ymerflow host bridge not initialised: window.__ymerflow_hooks missing.')
     return h[prop]
   },
 })
