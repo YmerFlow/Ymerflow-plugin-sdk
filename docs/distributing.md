@@ -51,8 +51,8 @@ from setuptools.command.build_py import build_py
 
 class BuildWithFrontend(build_py):
     def run(self):
-        # Guard lets a metadata-only install skip the frontend build (see NAGELFLUH_SKIP_FRONTEND_BUILD below).
-        if os.environ.get('NAGELFLUH_SKIP_FRONTEND_BUILD') != '1':
+        # Guard lets a metadata-only install skip the frontend build (see YMERFLOW_SKIP_FRONTEND_BUILD below).
+        if os.environ.get('YMERFLOW_SKIP_FRONTEND_BUILD') != '1':
             from ymerflow_plugin_build import build_frontend  # build dep — see pyproject.toml
             build_frontend(npm_name='@skytem/nagelfluh-plugin', npm_version='1.2.3',
                            out_dir='my_backend_plugin/frontend_dist')
@@ -104,5 +104,5 @@ extra flags. (The alternative — `pip install --no-build-isolation`, relying on
 present in the ambient environment — is fragile and should not be required.)
 
 For a metadata-only install that skips the frontend build entirely (e.g. on a machine without npm),
-set `NAGELFLUH_SKIP_FRONTEND_BUILD=1`; the `build_py` override checks it before invoking the build,
+set `YMERFLOW_SKIP_FRONTEND_BUILD=1`; the `build_py` override checks it before invoking the build,
 so neither npm nor the build dependency is consulted.
