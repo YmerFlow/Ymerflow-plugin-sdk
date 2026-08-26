@@ -22,13 +22,22 @@ Shared deps go in `peerDependencies` (the host provides them as MF singletons â€
 to the host's exact versions); any other dependency is a normal `dependency` and gets bundled. The
 `ymerflow` block names the MF remote and points at the **source** entry module.
 
+The current host singletons are `react`, `react-dom`, `@tanstack/react-query`, `react-router-dom`,
+and `markdown-to-jsx`. A plugin that uses routing (`useNavigate`/`useLocation`/`<Link>`) or markdown
+rendering must list `react-router-dom` / `markdown-to-jsx` in **`peerDependencies`** (not
+`dependencies`), exactly like `react` â€” this is what makes the plugin's hooks resolve against the
+host's live `<BrowserRouter>` instead of a private router copy (which would throw *"useX() may be
+used only in the context of a `<Router>`"*).
+
 ```jsonc
 {
   "name": "@skytem/nagelfluh-plugin",
   "version": "1.2.3",
   "peerDependencies": {
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.12.0",
+    "markdown-to-jsx": "^9.8.2"
   },
   "dependencies": { "some-lib": "^2.0.0" },
   "devDependencies": { "ymerflow-plugin-sdk": "^1.0.0" },

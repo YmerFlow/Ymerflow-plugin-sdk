@@ -40,6 +40,8 @@ HOST_SHARED_VERSIONS = {
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "@tanstack/react-query": "5.90.19",
+    "react-router-dom": "7.18.0",
+    "markdown-to-jsx": "9.8.2",
 }
 
 # Build toolchain versions used to scaffold the build (NOT shared with the host bundle).

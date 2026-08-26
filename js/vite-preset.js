@@ -22,6 +22,8 @@ export const DEFAULT_SHARED = {
   react: '18.2.0',
   'react-dom': '18.2.0',
   '@tanstack/react-query': '5.90.19',
+  'react-router-dom': '7.18.0',
+  'markdown-to-jsx': '9.8.2',
 }
 
 export function hostSharedVersions() {

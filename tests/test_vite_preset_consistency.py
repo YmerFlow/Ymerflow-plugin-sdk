@@ -68,7 +68,13 @@ def _parse_harness_shared_block(js_literal):
 def main():
     from ymerflow_plugin_build.build import _shared_block, HOST_SHARED_VERSIONS
 
-    versions = {"react": "18.2.0", "react-dom": "18.2.0", "@tanstack/react-query": "5.90.19"}
+    versions = {
+        "react": "18.2.0",
+        "react-dom": "18.2.0",
+        "@tanstack/react-query": "5.90.19",
+        "react-router-dom": "7.18.0",
+        "markdown-to-jsx": "9.8.2",
+    }
 
     preset = _eval_preset_shared(versions)
     preset_shared = preset["shared"]

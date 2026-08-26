@@ -279,6 +279,12 @@ registerHook('logged_out_routes', () => [
 ])
 ```
 
+Because `react-router-dom` is a host MF singleton (list it in `peerDependencies` — see
+[authoring](authoring.md#packagejson)), a `logged_out_routes` (or `app_routes`/`pages`) element may
+`import { useNavigate, useLocation, useParams } from 'react-router-dom'` and its hooks resolve
+against the host's live `<BrowserRouter>` — no `window.__ymerflow_*` router bridge is needed. The
+`menu_registrars` example above calls `navigate(...)` the same way (from `useNavigate()`).
+
 ### `fullscreen_pages`
 
 Register a full-screen page rendered with **no app chrome** (no menu bar, no layout) when the
