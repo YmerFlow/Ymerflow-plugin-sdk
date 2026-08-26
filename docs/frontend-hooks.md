@@ -197,6 +197,88 @@ registerHook('user_menu_extra_items', () => [
 ])
 ```
 
+### `menu_registrars`
+
+Contribute **top-level menu entries** into a menu bar at an arbitrary menu path (main menu /
+submenu / subsubmenu / …), built from a *dynamically fetched* list. The host renders each
+returned element as an **invisible registrar component** inside a live `MenuProvider`; that
+component calls `useRegisterMenu(...)` in an effect to inject entries into the shared menu tree.
+This indirection is what lets a plugin turn an async-fetched list into menu entries — the menu
+tree is built from imperative `registerMenu` calls, not a static array, so a plain array-returning
+hook couldn't express "add these entries once my data loads".
+
+- **Runner:** `run_jsx`
+- **Consumed by:** two menu bars:
+  - the logged-in app menu bar — `App.jsx` `MenuBarWithComponents`, called with `{ context: 'in' }`
+  - the logged-out landing-page menu bar — `LandingPage.jsx`, called with `{ context: 'out' }`
+    (this bar is hidden entirely unless some registrar contributes at least one entry, so a stock
+    install with no such plugin shows no navbar on the landing page)
+- **Hook argument:** an object `{ context: 'in' | 'out' }` — inspect it to contribute only to the
+  relevant bar (e.g. return `[]` for `'out'` if your entries are logged-in only)
+- **Callback returns:** array of ReactElements — invisible registrar components (they render
+  nothing; they exist only to run `useRegisterMenu` effects)
+
+To register into the shared menu tree from a registrar component, use the host-bridged
+`useRegisterMenu` hook (exposed on `window.__ymerflow_useRegisterMenu`, with the `MenuContext`
+object on `window.__ymerflow_MenuContext`, so a Module-Federation plugin uses the host's shared
+React singleton — the same bridging pattern as `window.__ymerflow_AuthContext`):
+
+Because `useRegisterMenu` is a React hook, call it **once per component** (never in a loop —
+rules of hooks). To register a variable-length list, render one small entry component per item:
+
+```js
+const useRegisterMenu = window.__ymerflow_useRegisterMenu
+
+// One entry component per item — each calls useRegisterMenu exactly once.
+function ReportMenuEntry({ item, position }) {
+  // useRegisterMenu(menuPath, action, position)
+  useRegisterMenu(['Reports', item.title], () => navigate(`/app/plugin/report/${item.id}`), position)
+  return null  // renders nothing; exists only to run the registration effect
+}
+
+// Registrar: turns the fetched list into entry components (fills in as data loads).
+function MyMenuRegistrar() {
+  const items = useMyFetchedList()  // e.g. a TanStack Query hook against your plugin API
+  return items.map((item, i) => <ReportMenuEntry key={item.id} item={item} position={i} />)
+}
+
+registerHook('menu_registrars', ({ context }) => {
+  if (context !== 'in') return []       // only contribute to the logged-in bar
+  return [<MyMenuRegistrar key="my-reports" />]
+})
+```
+
+`useRegisterMenu(path, action, position = 1, active = false)`:
+- `path` — array of labels from the menu root, one per nesting level (`['Reports', 'Monthly']`
+  creates a `Reports` top-level menu with a `Monthly` item)
+- `action` — click handler for the leaf entry
+- `position` — sort key among siblings; negative positions are right-aligned in the top bar
+- `active` — whether the leaf renders as the active item
+
+### `logged_out_routes`
+
+Register top-level React Router `<Route>` descriptors that render **while logged out**, before
+the landing page. The existing `app_routes`/`pages`/`fullscreen_pages` hooks are all evaluated
+only *after* authentication; `logged_out_routes` is the pre-auth counterpart, letting a public
+plugin serve standalone pages to anonymous visitors. When an anonymous visitor's URL matches one
+of these routes it renders; otherwise the landing page renders as the catch-all. (For this to
+work the plugin bundle must be loaded for anonymous visitors — see the backend
+[`frontend_bundles`](backend-hooks.md#frontend_bundles) `public` flag.)
+
+- **Runner:** `run_jsx`
+- **Consumed by:** `App.jsx` `AuthenticatedApp` — on the unauthenticated branch, rendered as
+  `<Routes>{...}<Route path="*" element={<LandingPage />} /></Routes>`
+- **Callback returns:** `Array<{ path: string, element: ReactElement }>` — same shape as
+  `app_routes`
+  - `path` — full route path (e.g. `/docs`, `/pricing`)
+  - `element` — React element to render
+
+```js
+registerHook('logged_out_routes', () => [
+  { path: '/docs/*', element: <PublicDocsPage /> },
+])
+```
+
 ### `fullscreen_pages`
 
 Register a full-screen page rendered with **no app chrome** (no menu bar, no layout) when the

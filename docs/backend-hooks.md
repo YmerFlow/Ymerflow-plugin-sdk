@@ -102,6 +102,11 @@ inside the Python package (built at `pip install` time, not in a Kubernetes pod)
   - `dist_dir` (str, **required**) — absolute path to the compiled `dist/` directory on disk
   - `name` (str, optional) — Module Federation remote name; falls back to `package.json`'s `ymerflow.remoteName`
   - `display_name` (str, optional) — human-readable label shown in the Plugin Manager; falls back to `name`
+  - `public` (bool, optional, default `False`) — when `True`, this bundle is loaded for
+    **anonymous (logged-out) visitors** too, not just authenticated users. See [Public bundles and
+    anonymous loading](#public-bundles-and-anonymous-loading) below. Omitting it (or setting it
+    `False`) keeps the bundle private — loaded only after login — so this flag is inert for every
+    existing bundle until one opts in.
 
 ```python
 import os
@@ -110,6 +115,27 @@ def frontend_bundles():
     dist = os.path.join(os.path.dirname(__file__), 'frontend_dist')
     return [{'dist_dir': dist, 'name': 'my_plugin', 'display_name': 'My Plugin'}]
 ```
+
+#### Public bundles and anonymous loading
+
+Backend-bundled frontend plugins are advertised to the frontend by `GET /plugins/me`, which the
+app calls on every login/logout transition to decide which Module-Federation bundles to load:
+
+- **Authenticated** → all backend-bundled plugins (plus the user's enabled remote plugins),
+  regardless of the `public` flag.
+- **Anonymous** (no/invalid credentials) → **only** the backend-bundled plugins flagged
+  `public: True`; the user-enabled remote-plugin query is skipped entirely (there is no user).
+
+A `public` bundle is what makes the pre-auth frontend seams usable by anonymous visitors — its
+hooks are registered before login, so its [`logged_out_routes`](frontend-hooks.md#logged_out_routes)
+render for anonymous URLs and its [`menu_registrars`](frontend-hooks.md#menu_registrars)
+`{ context: 'out' }` entries populate the landing-page menu bar. On each auth transition the
+frontend resets its plugin hook registry and reloads the appropriate set, so logging in adds the
+private bundles (and their menu entries), and logging out drops them again.
+
+Plugin *assets* are already served publicly from an unguessable content-hash URL
+(`/plugin-assets/{content_hash}/...`), so marking a bundle `public` changes only *which visitors
+are told to load it* — it does not change asset authorization.
 
 ## User hooks
 
