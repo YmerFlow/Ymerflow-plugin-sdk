@@ -326,6 +326,30 @@ class via `cluster_provider_handlers`.
   calls `connect()` then does a timeout-bounded `list_namespace` call to verify reachability. Raise
   a clear exception on failure. Override when a cheaper or more specific check makes sense (e.g.
   validating a token before even attempting a network call).
+- `node_capacity(k8s_client, provider_config: dict) -> dict` (async) — returns
+  `{"max_cpu_cores": float, "max_memory_gb": float}`, **the largest single pod this cluster's jobs
+  pool could ever admit** — i.e. one node's allocatable capacity, **never** a sum/aggregate across
+  nodes (a pod is atomic; it must fit on one node). This is the per-task ceiling the process
+  editor's CPU/RAM sliders bind to and that submit-time validation enforces, so a task larger than
+  one node is rejected at submit instead of hanging unschedulable until its deadline. The default
+  implementation reads live nodes (`list_node()`) and returns the **max** of their
+  `status.allocatable` — correct for any always-on cluster type (`same-as-backend`/minikube, always
+  ≥1 live node) with no per-provider work. **A scale-to-zero provider (a node pool that may have
+  zero nodes at query time) MUST override this** to return the single-node allocatable derived from
+  its machine type / VM SKU in `provider_config`, because the default path finds no nodes to read.
+  There is deliberately **no** fallback: a provider that can't answer **raises** (a real
+  misconfiguration surfaced loudly, per CLAUDE.md rule 8) — it must never return `None` or guess.
+- `aggregate_capacity(k8s_client, provider_config: dict) -> dict | None` (async) — returns the
+  cluster-wide **autoscaled** quota ceiling used to size the Kueue `ClusterQueue` `nominalQuota`,
+  shaped `{"cpu_cores": float, "memory_gb": float}` (the `quota_config` shape
+  `ensure_cluster_job_ready()` consumes), or `None` to decline. The default returns `None` —
+  "decline, fall through to node-sum sizing," correct for an always-on single-node cluster where
+  the sum of present nodes already is the full ceiling. **A scale-to-zero provider SHOULD override
+  this** to return its full autoscaled aggregate (e.g. `node_capacity × max_count`), otherwise its
+  `ClusterQueue` collapses to the 1-core/1-GiB floor when zero nodes are present (nothing can be
+  admitted → the autoscaler never triggers → deadlock). Unlike `node_capacity()`, `None` here is a
+  legitimate return (decline), not a failure — a provider that genuinely fails to compute an
+  aggregate it intended to supply should **raise**, not return `None`.
 - `bootstrap(provider_config: dict) -> dict` (sync) — **required**, no default. See [The
   `bootstrap()` provisioning flow](#the-bootstrap-provisioning-flow) below.
 - `teardown(provider_config: dict) -> None` (sync) — the mirror of `bootstrap()`: removes the
@@ -366,9 +390,30 @@ class GkeClusterProvider(ClusterProvider):
         # kubeconfig into the returned provider_config.
         return provider_config
 
+    # A scale-to-zero node pool may have ZERO live nodes when these are called, so both are derived
+    # from the machine type / max node count in provider_config — never by reading live nodes.
+    async def node_capacity(self, k8s_client, provider_config):
+        # Largest single pod this pool can admit = ONE node's allocatable (a pod can't span nodes).
+        sku = MACHINE_TYPES[provider_config["machine_type"]]
+        return {"max_cpu_cores": sku["allocatable_cpu"], "max_memory_gb": sku["allocatable_mem_gb"]}
+
+    async def aggregate_capacity(self, k8s_client, provider_config):
+        # Full autoscaled aggregate = one node × max_count, so the ClusterQueue advertises the whole
+        # pool instead of collapsing to the 1/1 floor at zero nodes.
+        node = await self.node_capacity(k8s_client, provider_config)
+        n = provider_config["max_count"]
+        return {"cpu_cores": node["max_cpu_cores"] * n, "memory_gb": node["max_memory_gb"] * n}
+
 def cluster_provider_handlers():
     return [("gke", GkeClusterProvider)]
 ```
+
+> **Scale-to-zero clusters must override `node_capacity()`.** A node pool that can have zero live
+> nodes at query time can't answer from `list_node()`, so the default `node_capacity()` (which reads
+> live nodes) raises. Override it to report the single-node SKU capacity from `provider_config`, and
+> override `aggregate_capacity()` to report `node_capacity × max_count`, so both the per-task ceiling
+> and the aggregate quota derive from one source of truth. An always-on cluster (always ≥1 node)
+> needs neither override.
 
 This mirrors the built-in `KubeconfigClusterProvider`
 (`backend/services/cluster_providers/kubeconfig.py`) almost exactly — most new cluster types are
@@ -399,14 +444,22 @@ itself — it only needs to construct and return the client; the host calls thes
 Once a `Cluster` becomes active (self-service registration callback, direct admin creation, or a
 config.env-driven `bootstrap()`-seeded default cluster), the host calls
 `backend.services.cluster_job_provisioning.ensure_cluster_job_ready(k8s_client, namespace,
-quota_config=None)` against it — installing Kueue (if not already present), sizing and applying a
-`ResourceFlavor`/`ClusterQueue`/`LocalQueue` from the cluster's real node capacity (or from the
-optional `quota_config` override, if given), and applying the backend's job-running RBAC. This is
-generic, pure-`kubernetes_asyncio` logic that works against **any**
-`K8sClient`, regardless of `cluster_type` — a plugin's `ClusterProvider` gets this for free just by
-returning a working `K8sClient` from `connect()`; it never needs to install Kueue or apply RBAC
-itself. See the host repo's `docs/architecture/registry.md` and
-`docs/plans/done/registry-backend-hooks.md` for the full design.
+quota_config=None, provider=None, provider_config=None)` against it — installing Kueue (if not
+already present), sizing and applying a `ResourceFlavor`/`ClusterQueue`/`LocalQueue`, and applying
+the backend's job-running RBAC. This is generic, pure-`kubernetes_asyncio` logic that works against
+**any** `K8sClient`, regardless of `cluster_type` — a plugin's `ClusterProvider` gets this for free
+just by returning a working `K8sClient` from `connect()`; it never needs to install Kueue or apply
+RBAC itself.
+
+The aggregate `ClusterQueue` quota is sized in this order: an explicit `quota_config` if passed;
+else the `provider`'s `aggregate_capacity(k8s_client, provider_config)` if a provider is passed and
+it returns a value (this is the funnel a scale-to-zero pool uses to advertise its full autoscaled
+ceiling — see `aggregate_capacity` above); else the live `list_node()` allocatable summed across
+present nodes. The host already passes `provider`/`provider_config` at every call site, so a
+plugin's only job is to implement `aggregate_capacity()` (and, for scale-to-zero, `node_capacity()`)
+on its `ClusterProvider`. See the host repo's `docs/architecture/registry.md`,
+`docs/plans/done/registry-backend-hooks.md`, and
+`docs/plans/done/single-node-task-size-accounting.md` for the full design.
 
 #### Hosting the app: `deploy_app()` / `expose_app()`
 
